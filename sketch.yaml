@@ -1,0 +1,3 @@
+# Arduino IDE 2 / CLI profile — ESP32-CAM safe flash settings
+default_fqbn: esp32:esp32:esp32cam:CPUFreq=240,FlashMode=dio,FlashFreq=40,PartitionScheme=huge_app,DebugLevel=none,EraseFlash=all
+default_port: COM8

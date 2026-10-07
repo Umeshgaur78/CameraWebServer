@@ -1,0 +1,9 @@
+# YOLOv8 dataset config — single class: dog sitting on car roof
+path: dataset
+train: images/train
+val: images/val
+
+names:
+  0: dog_on_roof
+
+nc: 1
