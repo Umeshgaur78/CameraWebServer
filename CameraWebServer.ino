@@ -35,6 +35,7 @@ const char *ALERT_SECRET = "YOUR_ALERT_SECRET";
 const char *NTFY_TOPIC = "YOUR_NTFY_TOPIC";
 
 #define AUTO_DETECT_INTERVAL_MS  6000
+#define LIVE_FRAME_INTERVAL_MS   3000
 #define AUTO_DOG_STREAK_NEED     2
 #define AUTO_HOLD_MS             8000
 #define AUTO_JPEG_QUALITY        12
@@ -48,6 +49,7 @@ static int dogStreak = 0;
 static bool autoAlertOn = false;
 static unsigned long holdUntil = 0;
 static unsigned long lastDetectMs = 0;
+static unsigned long lastLiveFrameMs = 0;
 static int captureFailStreak = 0;
 
 static bool initCamera() {
@@ -203,6 +205,7 @@ static bool postFrameForDetect(uint8_t *jpg, size_t len, float *outScore) {
   http.setReuse(false);
   http.addHeader("Content-Type", "image/jpeg");
   http.addHeader("x-alert-secret", ALERT_SECRET);
+  http.addHeader("x-cam-ip", WiFi.localIP().toString());
   http.addHeader("Connection", "close");
   int code = http.POST(jpg, len);
   String body = http.getString();
@@ -226,6 +229,50 @@ static bool postFrameForDetect(uint8_t *jpg, size_t len, float *outScore) {
     if (p >= 0) *outScore = body.substring(p + 8).toFloat();
   }
   return dog;
+}
+
+static void postLiveFrame() {
+  if (!ALERT_SERVER_URL || !ALERT_SERVER_URL[0]) return;
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (cameraStreamBusy()) return;
+
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) return;
+
+  uint8_t *jpg = nullptr;
+  size_t jpgLen = 0;
+  bool ownJpg = false;
+  if (fb->format == PIXFORMAT_JPEG && fb->len > 100) {
+    jpg = fb->buf;
+    jpgLen = fb->len;
+  } else if (frame2jpg(fb, 24, &jpg, &jpgLen) && jpg && jpgLen) {
+    ownJpg = true;
+  }
+
+  if (jpg && jpgLen) {
+    String url = String(ALERT_SERVER_URL);
+    while (url.endsWith("/")) url.remove(url.length() - 1);
+    url += "/frame";
+
+    HTTPClient http;
+    http.setTimeout(8000);
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure();
+    secureClient.setTimeout(6);
+    if (http.begin(secureClient, url)) {
+      http.addHeader("Content-Type", "image/jpeg");
+      http.addHeader("x-alert-secret", ALERT_SECRET);
+      http.addHeader("x-cam-ip", WiFi.localIP().toString());
+      http.addHeader("Connection", "close");
+      int code = http.POST(jpg, jpgLen);
+      Serial.printf("[Live] /frame HTTP %d (%u bytes)\n", code, (unsigned)jpgLen);
+      http.end();
+      secureClient.stop();
+    }
+  }
+
+  esp_camera_fb_return(fb);
+  if (ownJpg) free(jpg);
 }
 
 static void runAutoDetectOnce() {
@@ -329,6 +376,10 @@ void loop() {
   if (autoAlertOn && now >= holdUntil && dogStreak < AUTO_DOG_STREAK_NEED) {
     autoAlertOn = false;
     applyDogAlert(false);
+  }
+  if (now - lastLiveFrameMs >= LIVE_FRAME_INTERVAL_MS) {
+    lastLiveFrameMs = now;
+    postLiveFrame();
   }
   if (now - lastDetectMs >= AUTO_DETECT_INTERVAL_MS) {
     lastDetectMs = now;
